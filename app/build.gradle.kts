@@ -36,9 +36,11 @@ android {
 }
 
 dependencies {
+    implementation(project(":siphon"))
     implementation(Kotlin.stdlib.jdk8)
     implementation(AndroidX.appCompat)
     implementation(AndroidX.core.ktx)
     implementation(Google.android.material)
     implementation(AndroidX.constraintLayout)
+    implementation(KotlinX.coroutines.core)
 }

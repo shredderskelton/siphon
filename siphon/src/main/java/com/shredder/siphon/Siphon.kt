@@ -19,7 +19,8 @@ typealias Reducer<State, Change, Action> = (state: State, change: Change) -> Eff
 class Siphon<State : Any, Change : Any, Action : Any>(
     initialState: State,
     private val reducer: Reducer<State, Change, Action>,
-    private val actions: (action: Action) -> Flow<Change>
+    private val actions: (action: Action) -> Flow<Change>,
+    private val events: List<Flow<Change>> = emptyList()
 ) {
 
     private val changeRelay = BroadcastChannel<Change>(Channel.BUFFERED)
