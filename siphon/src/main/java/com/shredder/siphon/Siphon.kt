@@ -16,6 +16,9 @@ data class Effect<State : Any, Action : Any>(
 
 typealias Reducer<State, Change, Action> = (state: State, change: Change) -> Effect<State, Action>
 
+/** A function used for consuming events of given type. */
+typealias Watcher<Type> = (value: Type) -> Unit
+
 class Siphon<State : Any, Change : Any, Action : Any>(
     initialState: State,
     private val reducer: Reducer<State, Change, Action>,
