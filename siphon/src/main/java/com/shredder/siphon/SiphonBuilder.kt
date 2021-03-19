@@ -3,8 +3,6 @@ package com.shredder.siphon
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 
-
-/** Creates a [Knot] instance. */
 fun <State : Any, Change : Any, Action : Any> siphon(
     block: SiphonBuilder<State, Change, Action>.() -> Unit
 ): Siphon<State, Change, Action> =
@@ -23,23 +21,22 @@ internal constructor() {
     private var reduceOn: CoroutineDispatcher? = null
     private var reducer: Reducer<State, Change, Action>? = null
 
-    //    private val eventSources = mutableListOf<EventSource<Change>>()
-//    private val coldEventSources = lazy { mutableListOf<EventSource<Change>>() }
-//    private val actionTransformers = mutableListOf<ActionTransformer<Action, Change>>()
-    private var actions: ((Action) -> Flow<Change>)? = null
+    private val eventSources = mutableListOf<EventSource<Change>>()
+
+    //    private val coldEventSources = lazy { mutableListOf<EventSource<Change>>() }
+    private var action: (suspend (Action) -> Change)? = null
 //    private val stateInterceptors = mutableListOf<Interceptor<State>>()
 //    private val changeInterceptors = mutableListOf<Interceptor<Change>>()
 //    private val actionInterceptors = mutableListOf<Interceptor<Action>>()
 
-//    /** A section for [State] and [Change] related declarations. */
-//    fun state(block: StateBuilder<State>.() -> Unit) {
-//        StateBuilder(stateInterceptors)
-//            .also {
-//                block(it)
-//                initialState = it.initial
+    /** A section for [State] and [Change] related declarations. */
+    fun state(block: StateBuilder<State>.() -> Unit) {
+        StateBuilder<State>().also {
+            block(it)
+            initialState = it.initial
 //                observeOn = it.observeOn
-//            }
-//    }
+        }
+    }
 //
     /** A section for [Change] related declarations. */
     fun changes(block: ChangesBuilder<State, Change, Action>.() -> Unit) {
@@ -50,24 +47,28 @@ internal constructor() {
             }
     }
 //
-//    /** A section for [Action] related declarations. */
-//    fun actions(block: ActionsBuilder<Change, Action>.() -> Unit) {
-//        ActionsBuilder(actionTransformers, actionInterceptors).also(block)
-//    }
-//
-//    /** A section for *Event* related declarations. */
-//    fun events(block: EventsBuilder<Change>.() -> Unit) {
-//        EventsBuilder(eventSources, coldEventSources).also(block)
-//    }
+    /** A section for [Action] related declarations. */
+    fun actions(block: ActionsBuilder<Change, Action>.() -> Unit) {
+        ActionsBuilder<Change, Action>()
+            .also {
+                block(it)
+                action = it.action
+            }
+    }
+
+    /** A section for *Event* related declarations. */
+    fun events(block: EventsBuilder<Change>.() -> Unit) {
+        EventsBuilder(eventSources).also(block)
+    }
 
     internal fun build(): Siphon<State, Change, Action> = Siphon(
         initialState = checkNotNull(initialState) { "state { initial } must be declared" },
 //        observeOn = observeOn,
 //        reduceOn = reduceOn,
         reducer = checkNotNull(reducer) { "changes { reduce } must be declared" },
-//        eventSources = eventSources,
+        events = eventSources.map { it.invoke() },
 //        coldEventSources = coldEventSources,
-        actions = checkNotNull(actions) {  "actions { actions } must be declared" },
+        actions = checkNotNull(action) { "actions { actions } must be declared" },
 //        stateInterceptors = stateInterceptors,
 //        changeInterceptors = changeInterceptors,
 //        actionInterceptors = actionInterceptors
@@ -79,16 +80,6 @@ internal constructor() {
         //private val changeInterceptors: MutableList<Interceptor<Change>>
     ) {
         internal var reducer: Reducer<State, Change, Action>? = null
-
-//        /** An optional [Scheduler] used for reduce function. */
-//        var reduceOn: Scheduler? = null
-//
-//        /** An optional [Scheduler] used for watching *Changes*. */
-//        var watchOn: Scheduler? = null
-//            set(value) {
-//                field = value
-//                value?.let { changeInterceptors += WatchOnInterceptor(it) }
-//            }
 
         /**
          * Mandatory reduce function which receives the current [State] and a [Change]
@@ -113,21 +104,6 @@ internal constructor() {
         fun reduce(reducer: Reducer<State, Change, Action>) {
             this.reducer = reducer
         }
-
-//        /** A function for intercepting [Change] emissions. */
-//        fun intercept(interceptor: Interceptor<Change>) {
-//            changeInterceptors += interceptor
-//        }
-
-//        /** A function for watching [Change] emissions. */
-//        fun watchAll(watcher: Watcher<Change>) {
-//            changeInterceptors += WatchingInterceptor(watcher, watchOn)
-//        }
-
-        /** A function for watching emissions of all `Changes`. */
-//        inline fun <reified T : Change> watch(noinline watcher: Watcher<T>) {
-//            watchAll(TypedWatcher(T::class.java, watcher))
-//        }
 
         /** Turns [State] into an [Effect] without [Action]. */
         val State.only: Effect<State, Action> get() = Effect(this, emptyList())
@@ -191,6 +167,33 @@ internal constructor() {
         ): Effect<State, Action> =
             if (this is WhenState) block()
             else unexpected(change)
+    }
+}
+
+@SiphonDsl
+class StateBuilder<State : Any> {
+    var initial: State? = null
+}
+
+@SiphonDsl
+class ActionsBuilder<Change : Any, Action : Any> {
+    var action: (suspend (Action) -> Change)? = null
+
+    // TODO inline the type
+    fun perform(block: suspend (Action) -> Change) {
+        action = block
+    }
+}
+
+typealias EventSource<Change> = () -> Flow<Change>
+
+@SiphonDsl
+class EventsBuilder<Change : Any>
+internal constructor(
+    private val eventSources: MutableList<EventSource<Change>>
+) {
+    fun source(source: EventSource<Change>) {
+        eventSources += source
     }
 }
 
