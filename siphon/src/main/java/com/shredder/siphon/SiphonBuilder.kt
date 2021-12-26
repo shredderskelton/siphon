@@ -1,9 +1,12 @@
 package com.shredder.siphon
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.Flow
-
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.flatMapMerge
+import kotlinx.coroutines.flow.flowOf
 
 /** Creates a [Knot] instance. */
 fun <State : Any, Change : Any, Action : Any> siphon(
@@ -23,24 +26,22 @@ internal constructor() {
     private var liveIn: CoroutineScope = GlobalScope
     private var reducer: Reducer<State, Change, Action>? = null
 
-//    private val eventSources = mutableListOf<EventSource<Change>>()
-//    private val coldEventSources = lazy { mutableListOf<EventSource<Change>>() }
-//    private val actionTransformers = mutableListOf<ActionTransformer<Action, Change>>()
-    private var actions: ((Action) -> Flow<Change>)? = null
-//    private val stateInterceptors = mutableListOf<Interceptor<State>>()
-//    private val changeInterceptors = mutableListOf<Interceptor<Change>>()
-//    private val actionInterceptors = mutableListOf<Interceptor<Action>>()
+    private val eventSources = mutableListOf<EventSource<Change>>()
+    private val coldEventSources = lazy { mutableListOf<EventSource<Change>>() }
+    private val actionTransformers = mutableListOf<ActionTransformer<Action, Change>>()
+    private val stateInterceptors = mutableListOf<Interceptor<State>>()
+    private val changeInterceptors = mutableListOf<Interceptor<Change>>()
+    private val actionInterceptors = mutableListOf<Interceptor<Action>>()
 
-//    /** A section for [State] and [Change] related declarations. */
-//    fun state(block: StateBuilder<State>.() -> Unit) {
-//        StateBuilder(stateInterceptors)
-//            .also {
-//                block(it)
-//                initialState = it.initial
-//                observeOn = it.observeOn
-//            }
-//    }
-//
+    /** A section for [State] and [Change] related declarations. */
+    fun state(block: StateBuilder<State>.() -> Unit) {
+        StateBuilder(stateInterceptors)
+            .also {
+                block(it)
+                initialState = it.initial
+            }
+    }
+
     /** A section for [Change] related declarations. */
     fun changes(block: ChangesBuilder<State, Change, Action>.() -> Unit) {
         ChangesBuilder<State, Change, Action>()
@@ -49,28 +50,27 @@ internal constructor() {
                 reducer = it.reducer
             }
     }
-//
-//    /** A section for [Action] related declarations. */
-//    fun actions(block: ActionsBuilder<Change, Action>.() -> Unit) {
-//        ActionsBuilder(actionTransformers, actionInterceptors).also(block)
-//    }
-//
-//    /** A section for *Event* related declarations. */
-//    fun events(block: EventsBuilder<Change>.() -> Unit) {
-//        EventsBuilder(eventSources, coldEventSources).also(block)
-//    }
+
+    /** A section for [Action] related declarations. */
+    fun actions(block: ActionsBuilder<Change, Action>.() -> Unit) {
+        ActionsBuilder(actionTransformers, actionInterceptors).also(block)
+    }
+
+    /** A section for *Event* related declarations. */
+    fun events(block: EventsBuilder<Change>.() -> Unit) {
+        EventsBuilder(eventSources, coldEventSources).also(block)
+    }
 
     internal fun build(): Siphon<State, Change, Action> = Siphon(
         initialState = checkNotNull(initialState) { "state { initial } must be declared" },
 //        observeOn = observeOn,
 //        reduceOn = reduceOn,
         reducer = checkNotNull(reducer) { "changes { reduce } must be declared" },
-//        eventSources = eventSources,
-//        coldEventSources = coldEventSources,
-        actions = checkNotNull(actions) {  "actions { actions } must be declared" },
+         events = eventSources,
+        actionTransformers = actionTransformers,
 //        stateInterceptors = stateInterceptors,
 //        changeInterceptors = changeInterceptors,
-//        actionInterceptors = actionInterceptors
+//         actionInterceptors = actionInterceptors,
         coroutineScope = liveIn
     )
 
@@ -121,10 +121,10 @@ internal constructor() {
 //        }
 
         /** Turns [State] into an [Effect] without [Action]. */
-        val State.only: Effect<State, Action> get() = Effect(this, emptyList())
+        val State.only: Effect<State, Action> get() = Effect.WithAction(this, null)
 
         /** Combines [State] and [Action] into [Effect]. */
-        operator fun State.plus(action: Action?) = Effect(this, listOfNotNull(action))
+        operator fun State.plus(action: Action?) = Effect.WithAction(this, action)
 
         /** Throws [IllegalStateException] with current [State] and given [Change] in its message. */
         fun State.unexpected(change: Change): Nothing = error("Unexpected $change in $this")
@@ -154,7 +154,7 @@ internal constructor() {
             block: WhenState.() -> Effect<State, Action>
         ): Effect<State, Action> =
             if (this is WhenState) block()
-            else Effect(this, emptyList())
+            else Effect.WithAction(this, null)
 
         /**
          * Executes given block if the knot is in the given state or
@@ -183,5 +183,149 @@ internal constructor() {
             if (this is WhenState) block()
             else unexpected(change)
     }
+
+    /** A configuration builder for [State] related declarations. */
+    @SiphonDsl
+    class StateBuilder<State : Any>
+    internal constructor(
+        private val stateInterceptors: MutableList<Interceptor<State>>
+    ) {
+        /** Mandatory initial [State] of the [Knot]. */
+        var initial: State? = null
+
+        /** An optional [Scheduler] used for observing *State* updates. */
+        var observeOn: CoroutineDispatcher? = null
+
+        /** An optional [Scheduler] used for watching *State* updates. */
+        var watchOn: CoroutineDispatcher? = null
+            set(value) {
+                field = value
+                value?.let { stateInterceptors += WatchOnInterceptor(it) }
+            }
+
+        /** A function for intercepting [State] mutations. */
+        fun intercept(interceptor: Interceptor<State>) {
+            stateInterceptors += interceptor
+        }
+
+        /** A function for watching mutations of any [State]. */
+        fun watchAll(watcher: Watcher<State>) {
+            stateInterceptors += WatchingInterceptor(watcher, watchOn)
+        }
+
+        /** A function for watching mutations of all `States`. */
+        inline fun <reified T : State> watch(noinline watcher: Watcher<T>) {
+            watchAll(TypedWatcher(T::class.java, watcher))
+        }
+    }
+
+    @SiphonDsl
+    class ActionsBuilder<Change : Any, Action : Any>
+    internal constructor(
+        private val actionTransformers: MutableList<ActionTransformer<Action, Change>>,
+        private val actionInterceptors: MutableList<Interceptor<Action>>
+    ) {
+        /** An optional [Scheduler] used for watching *Actions*. */
+        var watchOn: CoroutineDispatcher? = null
+            set(value) {
+                field = value
+                value?.let { actionInterceptors += WatchOnInterceptor(it) }
+            }
+
+        /** A function used for declaring an [ActionTransformer] function. */
+        @PublishedApi
+        internal fun performAll(transformer: ActionTransformer<Action, Change>) {
+            actionTransformers += transformer
+        }
+
+        /**
+         * A function used for declaring an [ActionTransformer] function for given [Action] type.
+         *
+         * Example:
+         * ```
+         *  actions {
+         *      perform<Action.Load> {
+         *          flatMapSingle {
+         *              loadData()
+         *                  .map<Change> { Change.Load.Success(it) }
+         *                  .onErrorReturn { Change.Load.Failure(it) }
+         *          }
+         *      }
+         *  }
+         * ```
+         */
+         inline fun <reified A : Action> perform(noinline transformer: ActionTransformerWithReceiver<A, Change>) {
+             performAll{ action ->
+                 flowOf(action).filterIsInstance<A>().flatMapMerge { transformer(it) }
+             }
+         }
+
+        fun intercept(interceptor: Interceptor<Action>) {
+            actionInterceptors += interceptor
+        }
+
+        fun watchAll(watcher: Watcher<Action>) {
+            actionInterceptors += WatchingInterceptor(watcher, watchOn)
+        }
+
+        inline fun <reified T : Action> watch(noinline watcher: Watcher<T>) {
+            watchAll(TypedWatcher(T::class.java, watcher))
+        }
+    }
+
+    @SiphonDsl
+    class EventsBuilder<Change : Any>
+    internal constructor(
+        private val eventSources: MutableList<EventSource<Change>>,
+        private val coldEventsSources: Lazy<MutableList<EventSource<Change>>>
+    ) {
+        fun source(source: EventSource<Change>) {
+            eventSources += source
+        }
+
+        fun coldSource(source: EventSource<Change>) {
+            TODO("Not Implemented")
+            coldEventsSources.value += source
+        }
+    }
 }
 
+/** A function used for intercepting events of given type. */
+typealias Interceptor<Type> = (value: Flow<Type>) -> Flow<Type>
+
+internal class WatchingInterceptor<T>(
+    private val watcher: Watcher<T>,
+    private val watchOn: CoroutineDispatcher?
+) : Interceptor<T> {
+    override fun invoke(stream: Flow<T>): Flow<T> = TODO()
+
+    // stream.let { if (watchOn != null)
+    //     it.observeOn(watchOn) else it }.doOnNext(watcher)
+}
+
+internal class WatchOnInterceptor<T>(
+    private val watchOn: CoroutineDispatcher
+) : Interceptor<T> {
+    override fun invoke(stream: Flow<T>): Flow<T> = TODO()
+    // stream.observeOn(watchOn)
+}
+
+@PublishedApi
+internal class TypedWatcher<Type : Any, T : Type>(
+    private val type: Class<T>,
+    private val watch: Watcher<T>
+) : Watcher<Type> {
+    override fun invoke(value: Type) {
+        if (type.isInstance(value)) {
+            watch(type.cast(value))
+        }
+    }
+}
+//
+// @PublishedApi, @Suppress("UNCHECKED_CAST")
+// internal class TypedActionTransformer<Action : Any, Change : Any, A : Action>(
+//     private val type: Class<A>,
+//     private val transform: ActionTransformer<A, Change>
+// ) : ActionTransformer<Action, Change> {
+//    override fun invoke(action: Action): Flow<Change> = transform(action as A)
+// }

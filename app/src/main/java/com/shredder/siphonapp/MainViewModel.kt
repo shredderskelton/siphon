@@ -1,8 +1,6 @@
 package com.shredder.siphonapp
 
-import com.shredder.siphon.Effect
-import com.shredder.siphon.Siphon
-import kotlinx.coroutines.GlobalScope
+import com.shredder.siphon.siphon
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -24,35 +22,51 @@ interface MainViewModel {
 class MainViewModelImpl(private val service: BackendService = DefaultBackendService()) :
     MainViewModel {
 
-    private val siphon = Siphon<State, Change, Action>(
-        initialState = State(time = Duration.ZERO),
-        reducer = { state, change ->
-            when (change) {
-                is Change.SetUsers -> Effect(state.copy(users = change.users,getUsersEnabled = true)) //, listOf(Action.Dummy))
-                Change.Tick -> Effect(state.copy(time = state.time.plus(Duration.seconds(1))))
-                Change.Reset -> Effect(State(time = Duration.ZERO))
-                Change.OnClickGetUsers -> Effect(
-                    state.copy(getUsersEnabled = false),
-                    listOf(Action.GetUsers)
-                )
+    private val siphon = siphon<State, Change, Action> {
+        state {
+            initial = State(time = Duration.ZERO)
+        }
+        changes {
+            reduce { change ->
+
+                when (change) {
+                    is Change.SetUsers -> this.copy(
+                        users = change.users,
+                        getUsersEnabled = true
+                    ).only
+                    Change.Tick -> this.copy(time = this.time.plus(Duration.seconds(1))).only
+                    Change.Reset -> State(time = Duration.ZERO).only
+                    Change.OnClickGetUsers ->
+                        this.copy(getUsersEnabled = false) + Action.GetUsers
+                }
+
             }
-        },
-        actions = { action ->
-            when (action) {
-                Action.GetUsers -> flow { emit(service.getUsers()) }
+        }
+
+        actions {
+//            performAll {
+//                when (it) {
+//                    Action.GetUsers ->
+//                        flow { emit(service.getUsers()) }
+//                            .map { Change.SetUsers(it) }
+//                }
+//            }
+            perform<Action.GetUsers> {
+                flow { emit(service.getUsers()) }
                     .map { Change.SetUsers(it) }
             }
-        },
-        events = listOf(
-            flow {
-                while (currentCoroutineContext().isActive) {
-                    delay(1000)
-                    emit(Change.Tick)
+        }
+        events {
+            source {
+                flow {
+                    while (currentCoroutineContext().isActive) {
+                        delay(1000)
+                        emit(Change.Tick)
+                    }
                 }
-            },
-        ),
-        coroutineScope = GlobalScope
-    )
+            }
+        }
+    }
 
     override fun reset() {
         siphon.change(Change.Reset)
