@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    compileSdkVersion(30)
+    compileSdk = 31
 
     defaultConfig {
         applicationId = "com.shredder.siphonapp"
-        minSdkVersion(16)
-        targetSdkVersion(30)
+        minSdk = 16
+        targetSdk = 31
         versionCode = 1
         versionName = "1.0"
         //testInstrumentationRunner = "android.support.test.runner.AndroidJUnitRunner"
@@ -37,10 +37,11 @@ android {
 
 dependencies {
     implementation(project(":siphon"))
-    implementation(Kotlin.stdlib.jdk8)
-    implementation(AndroidX.appCompat)
-    implementation(AndroidX.core.ktx)
-    implementation(Google.android.material)
+    implementation(Kotlin.jdk8)
+    implementation(AndroidX.coreKtx)
+    implementation(Google.material)
     implementation(AndroidX.constraintLayout)
-    implementation(KotlinX.coroutines.core)
+    implementation(AndroidX.lifecycleRuntimeKtx)
+    implementation(AndroidX.lifecycleCommonJava8)
+    implementation(KotlinX.coroutines)
 }

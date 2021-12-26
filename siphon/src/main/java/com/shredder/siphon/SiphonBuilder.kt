@@ -1,6 +1,7 @@
 package com.shredder.siphon
 
-import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.Flow
 
 
@@ -19,11 +20,10 @@ class SiphonBuilder<State : Any, Change : Any, Action : Any>
 internal constructor() {
 
     private var initialState: State? = null
-    private var observeOn: CoroutineDispatcher? = null
-    private var reduceOn: CoroutineDispatcher? = null
+    private var liveIn: CoroutineScope = GlobalScope
     private var reducer: Reducer<State, Change, Action>? = null
 
-    //    private val eventSources = mutableListOf<EventSource<Change>>()
+//    private val eventSources = mutableListOf<EventSource<Change>>()
 //    private val coldEventSources = lazy { mutableListOf<EventSource<Change>>() }
 //    private val actionTransformers = mutableListOf<ActionTransformer<Action, Change>>()
     private var actions: ((Action) -> Flow<Change>)? = null
@@ -71,6 +71,7 @@ internal constructor() {
 //        stateInterceptors = stateInterceptors,
 //        changeInterceptors = changeInterceptors,
 //        actionInterceptors = actionInterceptors
+        coroutineScope = liveIn
     )
 
     @SiphonDsl
@@ -79,16 +80,6 @@ internal constructor() {
         //private val changeInterceptors: MutableList<Interceptor<Change>>
     ) {
         internal var reducer: Reducer<State, Change, Action>? = null
-
-//        /** An optional [Scheduler] used for reduce function. */
-//        var reduceOn: Scheduler? = null
-//
-//        /** An optional [Scheduler] used for watching *Changes*. */
-//        var watchOn: Scheduler? = null
-//            set(value) {
-//                field = value
-//                value?.let { changeInterceptors += WatchOnInterceptor(it) }
-//            }
 
         /**
          * Mandatory reduce function which receives the current [State] and a [Change]
