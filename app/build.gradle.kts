@@ -31,8 +31,16 @@ android {
 
     kotlinOptions {
         jvmTarget = "1.8"
+        freeCompilerArgs = listOf(
+            "-Xopt-in=kotlin.ExperimentalStdlibApi",
+            "-Xopt-in=kotlin.ExperimentalCoroutinesApi",
+            "-Xopt-in=kotlin.time.ExperimentalTime",
+            "-Xopt-in=kotlinx.coroutines.ExperimentalCoroutinesApi"
+        )
     }
-
+    buildFeatures {
+        viewBinding = true
+    }
 }
 
 dependencies {
@@ -41,7 +49,7 @@ dependencies {
     implementation(AndroidX.coreKtx)
     implementation(Google.material)
     implementation(AndroidX.constraintLayout)
-    implementation(AndroidX.lifecycleRuntimeKtx)
-    implementation(AndroidX.lifecycleCommonJava8)
     implementation(KotlinX.coroutines)
+
+    implementation(AndroidX.lifecycleRuntimeKtx)
 }
