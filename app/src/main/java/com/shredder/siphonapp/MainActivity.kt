@@ -13,7 +13,7 @@ import kotlin.time.ExperimentalTime
 @ExperimentalTime
 class MainActivity : AppCompatActivity() {
 
-    private val viewModel:MainViewModel by lazy { MainViewModelImpl() }
+    private val viewModel:MainViewModel by lazy { MainViewModelImpl(lifecycleScope) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

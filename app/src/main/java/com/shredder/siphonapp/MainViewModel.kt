@@ -1,6 +1,8 @@
 package com.shredder.siphonapp
 
 import com.shredder.siphon.siphon
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -19,16 +21,25 @@ interface MainViewModel {
 }
 
 @ExperimentalTime
-class MainViewModelImpl(private val service: BackendService = DefaultBackendService()) :
+class MainViewModelImpl(
+    private val scope: CoroutineScope,
+    private val service: BackendService = DefaultBackendService(),
+) :
     MainViewModel {
 
     private val siphon = siphon<State, Change, Action> {
+        life {
+            lifesycleScope = scope
+            reduceOn = Dispatchers.IO
+        }
         state {
             initial = State(time = Duration.ZERO)
+            watchAll {
+                println("State: $it")
+            }
         }
         changes {
             reduce { change ->
-
                 when (change) {
                     is Change.SetUsers -> this.copy(
                         users = change.users,
@@ -39,7 +50,13 @@ class MainViewModelImpl(private val service: BackendService = DefaultBackendServ
                     Change.OnClickGetUsers ->
                         this.copy(getUsersEnabled = false) + Action.GetUsers
                 }
-
+            }
+            watchAll {
+                println("Change: $it")
+            }
+            intercept {
+                println("Change Intercepted: $it")
+                it
             }
         }
 
@@ -54,6 +71,9 @@ class MainViewModelImpl(private val service: BackendService = DefaultBackendServ
             perform<Action.GetUsers> {
                 flow { emit(service.getUsers()) }
                     .map { Change.SetUsers(it) }
+            }
+            watchAll {
+                println("Action: $it")
             }
         }
         events {

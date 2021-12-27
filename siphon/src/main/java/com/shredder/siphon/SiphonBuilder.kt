@@ -1,14 +1,15 @@
 package com.shredder.siphon
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.flatMapMerge
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onEach
 
-/** Creates a [Knot] instance. */
+/** Creates a [Siphon] instance. */
 fun <State : Any, Change : Any, Action : Any> siphon(
     block: SiphonBuilder<State, Change, Action>.() -> Unit
 ): Siphon<State, Change, Action> =
@@ -23,15 +24,24 @@ class SiphonBuilder<State : Any, Change : Any, Action : Any>
 internal constructor() {
 
     private var initialState: State? = null
-    private var liveIn: CoroutineScope = GlobalScope
+    private var liveIn: CoroutineScope? = null
     private var reducer: Reducer<State, Change, Action>? = null
 
+    private var reduceOn: CoroutineDispatcher = Dispatchers.Default
+
     private val eventSources = mutableListOf<EventSource<Change>>()
-    private val coldEventSources = lazy { mutableListOf<EventSource<Change>>() }
     private val actionTransformers = mutableListOf<ActionTransformer<Action, Change>>()
     private val stateInterceptors = mutableListOf<Interceptor<State>>()
     private val changeInterceptors = mutableListOf<Interceptor<Change>>()
     private val actionInterceptors = mutableListOf<Interceptor<Action>>()
+
+    fun life(block: LifeBuilder.() -> Unit) {
+        LifeBuilder().also {
+            block(it)
+            liveIn = it.lifesycleScope
+            reduceOn = it.reduceOn
+        }
+    }
 
     /** A section for [State] and [Change] related declarations. */
     fun state(block: StateBuilder<State>.() -> Unit) {
@@ -44,7 +54,7 @@ internal constructor() {
 
     /** A section for [Change] related declarations. */
     fun changes(block: ChangesBuilder<State, Change, Action>.() -> Unit) {
-        ChangesBuilder<State, Change, Action>()
+        ChangesBuilder<State, Change, Action>(changeInterceptors)
             .also {
                 block(it)
                 reducer = it.reducer
@@ -58,26 +68,25 @@ internal constructor() {
 
     /** A section for *Event* related declarations. */
     fun events(block: EventsBuilder<Change>.() -> Unit) {
-        EventsBuilder(eventSources, coldEventSources).also(block)
+        EventsBuilder(eventSources).also(block)
     }
 
     internal fun build(): Siphon<State, Change, Action> = Siphon(
         initialState = checkNotNull(initialState) { "state { initial } must be declared" },
-//        observeOn = observeOn,
-//        reduceOn = reduceOn,
+        reduceOn = reduceOn,
         reducer = checkNotNull(reducer) { "changes { reduce } must be declared" },
         events = eventSources,
         actionTransformers = actionTransformers,
         actionInterceptors = actionInterceptors,
-//        stateInterceptors = stateInterceptors,
-//        changeInterceptors = changeInterceptors,
-        coroutineScope = liveIn
+        stateInterceptors = stateInterceptors,
+        changeInterceptors = changeInterceptors,
+        coroutineScope = checkNotNull(liveIn) { "You must define a scope for the Siphon to live in" },
     )
 
     @SiphonDsl
     class ChangesBuilder<State : Any, Change : Any, Action : Any>
     internal constructor(
-        //private val changeInterceptors: MutableList<Interceptor<Change>>
+        private val changeInterceptors: MutableList<Interceptor<Change>>
     ) {
         internal var reducer: Reducer<State, Change, Action>? = null
 
@@ -105,20 +114,22 @@ internal constructor() {
             this.reducer = reducer
         }
 
-//        /** A function for intercepting [Change] emissions. */
-//        fun intercept(interceptor: Interceptor<Change>) {
-//            changeInterceptors += interceptor
-//        }
+        /** A function for intercepting [Change] emissions. */
+        fun intercept(interceptor: Interceptor<Change>) {
+            changeInterceptors += interceptor
+        }
 
-//        /** A function for watching [Change] emissions. */
-//        fun watchAll(watcher: Watcher<Change>) {
-//            changeInterceptors += WatchingInterceptor(watcher, watchOn)
-//        }
+        /** A function for watching [Change] emissions. */
+        fun watchAll(watcher: Watcher<Change>) {
+            changeInterceptors += WatchingInterceptor(watcher)
+        }
 
         /** A function for watching emissions of all `Changes`. */
-//        inline fun <reified T : Change> watch(noinline watcher: Watcher<T>) {
-//            watchAll(TypedWatcher(T::class.java, watcher))
-//        }
+        inline fun <reified T : Change> watch(noinline watcher: Watcher<T>) {
+            watchAll { change ->
+                flowOf(change).filterIsInstance<T>().onEach { watcher(it) }
+            }
+        }
 
         /** Turns [State] into an [Effect] without [Action]. */
         val State.only: Effect<State, Action> get() = Effect.WithAction(this, null)
@@ -184,6 +195,12 @@ internal constructor() {
             else unexpected(change)
     }
 
+    @SiphonDsl
+    class LifeBuilder {
+        var lifesycleScope: CoroutineScope? = null
+        var reduceOn: CoroutineDispatcher = Dispatchers.Default
+    }
+
     /** A configuration builder for [State] related declarations. */
     @SiphonDsl
     class StateBuilder<State : Any>
@@ -205,7 +222,9 @@ internal constructor() {
 
         /** A function for watching mutations of all `States`. */
         inline fun <reified T : State> watch(noinline watcher: Watcher<T>) {
-            watchAll(TypedWatcher(T::class.java, watcher))
+            watchAll { state ->
+                if (state is T) watcher(state)
+            }
         }
     }
 
@@ -262,15 +281,9 @@ internal constructor() {
     class EventsBuilder<Change : Any>
     internal constructor(
         private val eventSources: MutableList<EventSource<Change>>,
-        private val coldEventsSources: Lazy<MutableList<EventSource<Change>>>
     ) {
         fun source(source: EventSource<Change>) {
             eventSources += source
-        }
-
-        fun coldSource(source: EventSource<Change>) {
-            TODO("Not Implemented")
-            coldEventsSources.value += source
         }
     }
 }
@@ -283,23 +296,3 @@ internal class WatchingInterceptor<T>(
 ) : Interceptor<T> {
     override fun invoke(stream: Flow<T>): Flow<T> = stream.onEach { watcher(it) }
 }
-
-@PublishedApi
-internal class TypedWatcher<Type : Any, T : Type>(
-    private val type: Class<T>,
-    private val watch: Watcher<T>
-) : Watcher<Type> {
-    override fun invoke(value: Type) {
-        if (type.isInstance(value)) {
-            watch(type.cast(value))
-        }
-    }
-}
-//
-// @PublishedApi, @Suppress("UNCHECKED_CAST")
-// internal class TypedActionTransformer<Action : Any, Change : Any, A : Action>(
-//     private val type: Class<A>,
-//     private val transform: ActionTransformer<A, Change>
-// ) : ActionTransformer<Action, Change> {
-//    override fun invoke(action: Action): Flow<Change> = transform(action as A)
-// }
