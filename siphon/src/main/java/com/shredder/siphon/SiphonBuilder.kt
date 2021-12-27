@@ -1,12 +1,12 @@
 package com.shredder.siphon
 
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.flatMapMerge
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 
 /** Creates a [Knot] instance. */
 fun <State : Any, Change : Any, Action : Any> siphon(
@@ -66,11 +66,11 @@ internal constructor() {
 //        observeOn = observeOn,
 //        reduceOn = reduceOn,
         reducer = checkNotNull(reducer) { "changes { reduce } must be declared" },
-         events = eventSources,
+        events = eventSources,
         actionTransformers = actionTransformers,
+        actionInterceptors = actionInterceptors,
 //        stateInterceptors = stateInterceptors,
 //        changeInterceptors = changeInterceptors,
-//         actionInterceptors = actionInterceptors,
         coroutineScope = liveIn
     )
 
@@ -193,16 +193,6 @@ internal constructor() {
         /** Mandatory initial [State] of the [Knot]. */
         var initial: State? = null
 
-        /** An optional [Scheduler] used for observing *State* updates. */
-        var observeOn: CoroutineDispatcher? = null
-
-        /** An optional [Scheduler] used for watching *State* updates. */
-        var watchOn: CoroutineDispatcher? = null
-            set(value) {
-                field = value
-                value?.let { stateInterceptors += WatchOnInterceptor(it) }
-            }
-
         /** A function for intercepting [State] mutations. */
         fun intercept(interceptor: Interceptor<State>) {
             stateInterceptors += interceptor
@@ -210,7 +200,7 @@ internal constructor() {
 
         /** A function for watching mutations of any [State]. */
         fun watchAll(watcher: Watcher<State>) {
-            stateInterceptors += WatchingInterceptor(watcher, watchOn)
+            stateInterceptors += WatchingInterceptor(watcher)
         }
 
         /** A function for watching mutations of all `States`. */
@@ -225,13 +215,6 @@ internal constructor() {
         private val actionTransformers: MutableList<ActionTransformer<Action, Change>>,
         private val actionInterceptors: MutableList<Interceptor<Action>>
     ) {
-        /** An optional [Scheduler] used for watching *Actions*. */
-        var watchOn: CoroutineDispatcher? = null
-            set(value) {
-                field = value
-                value?.let { actionInterceptors += WatchOnInterceptor(it) }
-            }
-
         /** A function used for declaring an [ActionTransformer] function. */
         @PublishedApi
         internal fun performAll(transformer: ActionTransformer<Action, Change>) {
@@ -254,22 +237,24 @@ internal constructor() {
          *  }
          * ```
          */
-         inline fun <reified A : Action> perform(noinline transformer: ActionTransformerWithReceiver<A, Change>) {
-             performAll{ action ->
-                 flowOf(action).filterIsInstance<A>().flatMapMerge { transformer(it) }
-             }
-         }
+        inline fun <reified A : Action> perform(noinline transformer: ActionTransformerWithReceiver<A, Change>) {
+            performAll { action ->
+                flowOf(action).filterIsInstance<A>().flatMapMerge { transformer(it) }
+            }
+        }
 
         fun intercept(interceptor: Interceptor<Action>) {
             actionInterceptors += interceptor
         }
 
         fun watchAll(watcher: Watcher<Action>) {
-            actionInterceptors += WatchingInterceptor(watcher, watchOn)
+            actionInterceptors += WatchingInterceptor(watcher)
         }
 
         inline fun <reified T : Action> watch(noinline watcher: Watcher<T>) {
-            watchAll(TypedWatcher(T::class.java, watcher))
+            watchAll { action ->
+                if (action is T) watcher(action)
+            }
         }
     }
 
@@ -294,20 +279,9 @@ internal constructor() {
 typealias Interceptor<Type> = (value: Flow<Type>) -> Flow<Type>
 
 internal class WatchingInterceptor<T>(
-    private val watcher: Watcher<T>,
-    private val watchOn: CoroutineDispatcher?
+    private val watcher: Watcher<T>
 ) : Interceptor<T> {
-    override fun invoke(stream: Flow<T>): Flow<T> = TODO()
-
-    // stream.let { if (watchOn != null)
-    //     it.observeOn(watchOn) else it }.doOnNext(watcher)
-}
-
-internal class WatchOnInterceptor<T>(
-    private val watchOn: CoroutineDispatcher
-) : Interceptor<T> {
-    override fun invoke(stream: Flow<T>): Flow<T> = TODO()
-    // stream.observeOn(watchOn)
+    override fun invoke(stream: Flow<T>): Flow<T> = stream.onEach { watcher(it) }
 }
 
 @PublishedApi
