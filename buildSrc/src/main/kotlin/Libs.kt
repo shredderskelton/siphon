@@ -2,7 +2,6 @@ object AndroidX{
     const val coreKtx = "androidx.core:core-ktx:1.6.0"
     const val constraintLayout = "androidx.constraintlayout:constraintlayout:2.1.1"
     const val lifecycleRuntimeKtx = "androidx.lifecycle:lifecycle-runtime-ktx:2.3.1"
-    const val lifecycleCommonJava8 = "androidx.lifecycle:lifecycle-common-java8:2.3.1"
 }
 
 object Google{

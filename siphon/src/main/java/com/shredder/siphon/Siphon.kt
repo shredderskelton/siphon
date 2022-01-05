@@ -2,13 +2,16 @@ package com.shredder.siphon
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapMerge
-import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.flattenMerge
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.withContext
@@ -54,7 +57,22 @@ typealias ActionTransformerWithReceiver<Action, Change> = Action.() -> Flow<Chan
 /** A function used for consuming events of given type. */
 typealias Watcher<Type> = (value: Type) -> Unit
 
-class Siphon<State : Any, Change : Any, Action : Any>(
+interface Siphon<State : Any, Change : Any> : Store<State> {
+
+    /** Change emitter used for delivering changes to this knot. */
+    val change: MutableSharedFlow<Change>
+}
+
+/** Store is a disposable container for a [State]. */
+interface Store<State : Any> {
+
+    /** Observable state. */
+    val state: Flow<State>
+}
+
+@ExperimentalCoroutinesApi
+@FlowPreview
+class DefaultSiphon<State : Any, Change : Any, Action : Any>(
     initialState: State,
     private val reducer: Reducer<State, Change, Action>,
     private val actionTransformers: List<ActionTransformer<Action, Change>>,
@@ -63,8 +81,8 @@ class Siphon<State : Any, Change : Any, Action : Any>(
     stateInterceptors: List<Interceptor<State>>,
     events: List<EventSource<Change>> = emptyList(),
     coroutineScope: CoroutineScope,
-    private val reduceOn:CoroutineDispatcher,
-) {
+    private val reduceOn: CoroutineDispatcher,
+) : Siphon<State, Change> {
 
     private val changeRelay = MutableSharedFlow<Change>(0, 100, BufferOverflow.SUSPEND)
     private val actionRelay = MutableSharedFlow<Action>(0, 100, BufferOverflow.SUSPEND)
@@ -77,12 +95,13 @@ class Siphon<State : Any, Change : Any, Action : Any>(
 
     private val eventFlow = events.map { it() }
 
-    private val changes = merge(*eventFlow.plus(actionFlow).plus(changeFlow).toTypedArray())
+    private val changes = eventFlow.plus(actionFlow).plus(changeFlow).asFlow().flattenMerge()
 
-    val state: Flow<State> = changes
+    override val state: Flow<State> = changes
         .scan(initialState) { oldState, change ->
             withContext(reduceOn) { reduce(oldState, change) }
         }
+        .distinctUntilChanged { old, new -> old === new }
         .intercept(stateInterceptors)
         .shareIn(coroutineScope, SharingStarted.WhileSubscribed(), 1)
 
@@ -103,6 +122,21 @@ class Siphon<State : Any, Change : Any, Action : Any>(
 
     fun change(change: Change) {
         if (!changeRelay.tryEmit(change)) println("Siphon: Change Buffer overload")
+    }
+
+    override val change = changeRelay
+}
+
+internal fun <State : Any, Action : Any> Effect<State, Action>.emitActions(
+    actionSubject: MutableSharedFlow<Action>
+): State = when (this) {
+    is Effect.WithAction -> {
+        action?.let { action -> actionSubject.tryEmit(action) }
+        state
+    }
+    is Effect.WithActions -> {
+        for (action in actions) actionSubject.tryEmit(action)
+        state
     }
 }
 

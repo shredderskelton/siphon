@@ -3,6 +3,8 @@ package com.shredder.siphon
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.flatMapMerge
@@ -10,9 +12,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onEach
 
 /** Creates a [Siphon] instance. */
+@ExperimentalCoroutinesApi
+@FlowPreview
 fun <State : Any, Change : Any, Action : Any> siphon(
     block: SiphonBuilder<State, Change, Action>.() -> Unit
-): Siphon<State, Change, Action> =
+): DefaultSiphon<State, Change, Action> =
     SiphonBuilder<State, Change, Action>()
         .also(block)
         .build()
@@ -20,6 +24,8 @@ fun <State : Any, Change : Any, Action : Any> siphon(
 @DslMarker
 annotation class SiphonDsl
 
+@ExperimentalCoroutinesApi
+@FlowPreview
 class SiphonBuilder<State : Any, Change : Any, Action : Any>
 internal constructor() {
 
@@ -71,7 +77,7 @@ internal constructor() {
         EventsBuilder(eventSources).also(block)
     }
 
-    internal fun build(): Siphon<State, Change, Action> = Siphon(
+    internal fun build(): DefaultSiphon<State, Change, Action> = DefaultSiphon(
         initialState = checkNotNull(initialState) { "state { initial } must be declared" },
         reduceOn = reduceOn,
         reducer = checkNotNull(reducer) { "changes { reduce } must be declared" },
@@ -189,7 +195,8 @@ internal constructor() {
          * ```
          */
         inline fun <reified WhenState : State> State.requireState(
-            change: Change, block: WhenState.() -> Effect<State, Action>
+            change: Change,
+            block: WhenState.() -> Effect<State, Action>
         ): Effect<State, Action> =
             if (this is WhenState) block()
             else unexpected(change)
@@ -207,7 +214,7 @@ internal constructor() {
     internal constructor(
         private val stateInterceptors: MutableList<Interceptor<State>>
     ) {
-        /** Mandatory initial [State] of the [Knot]. */
+        /** Mandatory initial [State] of the [Siphon]. */
         var initial: State? = null
 
         /** A function for intercepting [State] mutations. */
@@ -227,64 +234,65 @@ internal constructor() {
             }
         }
     }
+}
 
-    @SiphonDsl
-    class ActionsBuilder<Change : Any, Action : Any>
-    internal constructor(
-        private val actionTransformers: MutableList<ActionTransformer<Action, Change>>,
-        private val actionInterceptors: MutableList<Interceptor<Action>>
-    ) {
-        /** A function used for declaring an [ActionTransformer] function. */
-        @PublishedApi
-        internal fun performAll(transformer: ActionTransformer<Action, Change>) {
-            actionTransformers += transformer
-        }
+@ExperimentalCoroutinesApi
+@FlowPreview
+@SiphonDsl
+class ActionsBuilder<Change : Any, Action : Any>
+internal constructor(
+    private val actionTransformers: MutableList<ActionTransformer<Action, Change>>,
+    private val actionInterceptors: MutableList<Interceptor<Action>>
+) {
+    /** A function used for declaring an [ActionTransformer] function. */
+    @PublishedApi
+    internal fun performAll(transformer: ActionTransformer<Action, Change>) {
+        actionTransformers += transformer
+    }
 
-        /**
-         * A function used for declaring an [ActionTransformer] function for given [Action] type.
-         *
-         * Example:
-         * ```
-         *  actions {
-         *      perform<Action.Load> {
-         *          flatMapSingle {
-         *              loadData()
-         *                  .map<Change> { Change.Load.Success(it) }
-         *                  .onErrorReturn { Change.Load.Failure(it) }
-         *          }
-         *      }
-         *  }
-         * ```
-         */
-        inline fun <reified A : Action> perform(noinline transformer: ActionTransformerWithReceiver<A, Change>) {
-            performAll { action ->
-                flowOf(action).filterIsInstance<A>().flatMapMerge { transformer(it) }
-            }
-        }
-
-        fun intercept(interceptor: Interceptor<Action>) {
-            actionInterceptors += interceptor
-        }
-
-        fun watchAll(watcher: Watcher<Action>) {
-            actionInterceptors += WatchingInterceptor(watcher)
-        }
-
-        inline fun <reified T : Action> watch(noinline watcher: Watcher<T>) {
-            watchAll { action ->
-                if (action is T) watcher(action)
-            }
+    /**
+     * A function used for declaring an [ActionTransformer] function for given [Action] type.
+     *
+     * Example:
+     * ```
+     *  actions {
+     *      perform<Action.Load> {
+     *          flatMapSingle {
+     *              loadData()
+     *                  .map<Change> { Change.Load.Success(it) }
+     *                  .onErrorReturn { Change.Load.Failure(it) }
+     *          }
+     *      }
+     *  }
+     * ```
+     */
+    inline fun <reified A : Action> perform(noinline transformer: ActionTransformerWithReceiver<A, Change>) {
+        performAll { action ->
+            flowOf(action).filterIsInstance<A>().flatMapMerge { transformer(it) }
         }
     }
 
-    @SiphonDsl
-    class EventsBuilder<Change : Any>
-    internal constructor(
-        private val eventSources: MutableList<EventSource<Change>>,
-    ) {
-        fun source(source: EventSource<Change>) {
-            eventSources += source
+    fun intercept(interceptor: Interceptor<Action>) {
+        actionInterceptors += interceptor
+    }
+
+    fun watchAll(watcher: Watcher<Action>) {
+        actionInterceptors += WatchingInterceptor(watcher)
+    }
+
+    inline fun <reified T : Action> watch(noinline watcher: Watcher<T>) {
+        watchAll { action ->
+            if (action is T) watcher(action)
         }
+    }
+}
+@SiphonDsl
+class EventsBuilder<Change : Any>
+internal constructor(
+    private val eventSources: MutableList<EventSource<Change>>,
+) {
+    fun source(source: EventSource<Change>) {
+        eventSources += source
     }
 }
 
